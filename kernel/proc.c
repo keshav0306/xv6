@@ -6,6 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 
+void test_git()
+{
+  printf("hello world\n");
+}
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
