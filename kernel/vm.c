@@ -6,6 +6,8 @@
 #include "defs.h"
 #include "fs.h"
 
+int ref_count[PHYSTOP / PGSIZE] = {0};
+
 /*
  * the kernel's page table.
  */
@@ -14,6 +16,19 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+uint64 curr_used_pages(){
+  uint64 count = 0;
+  for(int i=0;i<PHYSTOP/PGSIZE;i+=1){
+    if(ref_count[i]>0){
+      count++;
+    }
+    else if(ref_count[i]<0){
+      panic("negative ref_count!");
+    }
+  }
+  return count;
+}
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -153,10 +168,38 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+    // if(*pte & PTE_V)
+    //   panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
+  }
+  return 0;
+}
+
+int
+mappages_trp(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  if(va % PGSIZE == 0){
+    mappages(pagetable, va, size, pa, perm);
+  }
+  uint64 a, last;
+  pte_t *pte;
+
+  if(size == 0)
+    panic("mappages: size");
+  
+  a = PGROUNDDOWN(va);
+  last = PGROUNDDOWN(va + size - 1);
+  for(;;){
+    if((pte = walk(pagetable, a, 1)) == 0)
+      return -1;
+    // if(*pte & PTE_V)
+    //   panic("mappages: remap");
+    *pte = PA2PTE(pa) | perm | PTE_V;
+    // if(a == last-1)
       break;
     a += PGSIZE;
     pa += PGSIZE;
@@ -176,9 +219,19 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
-  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE)
+  {
+    // printf("abhi error dega\n");
+    if((pte = walk(pagetable, a, 0)) == 0){
+
+    }
+      // panic("uvmunmap: walk");
+    // if (ref_count[(uint64)PTE2PA(*pte) / PGSIZE] > 1)
+    // {
+    //   ref_count[(uint64)PTE2PA(*pte) / PGSIZE]--;
+    //   *pte = 0;
+    //   continue;
+    // }
     if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
@@ -332,6 +385,37 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+int uvmcopy_cow(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  // char *mem;
+
+  for (i = 0; i < sz; i += PGSIZE)
+  {
+    if ((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if ((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    // printf("cow: same page mapped ++ ");
+    ref_count[pa / PGSIZE]++;
+    // printf("%d\n",ref_count[pa / PGSIZE]);
+    (*pte) &= ~(1L << 2);
+    flags = PTE_FLAGS(*pte);
+    if (mappages(new, i, PGSIZE, (uint64)pa, flags & ~(1L << 2)) != 0)
+    {
+      // goto err;
+    }
+  }
+  return 0;
+
+// err:
+//   uvmunmap(new, 0, i / PGSIZE, 1);
+//   return -1;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -361,7 +445,32 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
+
+    pte_t * pte = walk(pagetable, va0, 0);
+    int flags = PTE_FLAGS(*pte);
+
+    if(flags & (1<<2)){
     memmove((void *)(pa0 + (dstva - va0)), src, n);
+    }
+    else{
+    if (ref_count[pa0 / PGSIZE] == 1)
+    {
+      // permissions change only
+      ref_count[pa0 / PGSIZE] = 1;
+      (*pte) |= (1 << 2);
+      flags = PTE_FLAGS(*pte);
+      memmove((void *)(pa0 + (dstva - va0)), src, n);
+      return 0;
+    }
+    char * mem = kalloc();
+    ref_count[pa0 / PGSIZE]--;
+    memmove(mem, (char *)pa0, PGSIZE);
+
+    if(mappages_trp(pagetable, va0, PGSIZE, (uint64)mem, flags | (1L << 2)) != 0){
+      return -1;
+    }
+    memmove((void *)((uint64)mem + (dstva - va0)), src, n);
+    }
 
     len -= n;
     src += n;

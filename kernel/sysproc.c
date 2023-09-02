@@ -7,6 +7,23 @@
 #include "proc.h"
 
 uint64
+sys_waitx(void)
+{
+  uint64 addr, addr1, addr2;
+  uint wtime, rtime;
+  argaddr(0, &addr);
+  argaddr(1, &addr1);
+  argaddr(2, &addr2);
+  int ret = waitx(addr, &wtime, &rtime);
+  struct proc* p = myproc();
+  if (copyout(p->pagetable, addr1,(char*)&wtime, sizeof(int)) < 0)
+    return -1;
+  if (copyout(p->pagetable, addr2,(char*)&rtime, sizeof(int)) < 0)
+    return -1;
+  return ret;
+}
+
+uint64
 sys_exit(void)
 {
   int n;
@@ -88,4 +105,51 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64 sys_trace(void)
+{
+  int mask;
+  argint(0, &mask);
+  trace(mask);
+  return 1;
+}
+
+uint64 sys_sigalarm(void)
+{
+  int ticks;
+  argint(0, &ticks);
+  uint64 fn;
+  argaddr(1, &fn);
+  sigalarm(ticks, fn);
+  return 1;
+}
+
+uint64 sys_sigreturn(void)
+{
+  sigreturn();
+  return myproc()->trapframe->a0;
+}
+
+uint64 sys_settickets(void)
+{
+
+  int tickets;
+  argint(0, &tickets);
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->tickets = tickets;
+  printf("process with pid %d has been alloted %d tickets\n", p->pid, p->tickets);
+  release(&p->lock);
+  return 1;
+}
+
+uint64
+sys_set_priority()
+{
+  int new_priority;
+  int pid;
+  argint(0, &new_priority);
+  argint(1, &pid);
+  return set_priority(new_priority, pid);
 }

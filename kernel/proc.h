@@ -92,16 +92,42 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
 
+  int mask; // mask for strace
+  int ticks; // if the program sets an alarm
+  int sigalarm_ticks; // the set alarm time
+  int sigalarm_routine; // 1 when executing alarm routine, 0 when executing the main process
+  uint64 sigalarm_fn;
+  int tickets;
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
+  int start_time;
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
+  uint64 last_sleep_tick;
+  uint64 sleep_ticks;
+  uint64 running_ticks;
+  uint64 end_time;
+  int nice;
+  int static_priority;
+  int num_sched;
   pagetable_t pagetable;       // User page table
+  pagetable_t pagetable_cpy; // copy of the user page table for sigalarm/sigreturn
   struct trapframe *trapframe; // data page for trampoline.S
+  struct trapframe *trapframe_cpy; // copy of the trapframe for sigalarm/sigreturn
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+   int queue_time; // time (in ticks) process was RUNNING in the queue p->mlfq_q
+  int queue_wait_time;
+
+  int in_mlfq;
+
+  struct proc *mlfq_nxt;
+  struct queue *mlfq_q;
+
+  int cycle;
 };
